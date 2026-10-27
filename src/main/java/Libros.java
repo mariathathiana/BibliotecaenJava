@@ -1,3 +1,4 @@
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Scanner;
 import java.sql.Connection;
@@ -31,6 +32,7 @@ class GestionLibros {
 
     public GestionLibros() throws SQLException {
         crearTabla();
+        crearTablaPrestamos();
     }
 
     // Crear la tabla si todavía no existe.
@@ -141,8 +143,230 @@ class GestionLibros {
             }
         }
     }
+
+    public void prestarLibro(
+            String nombreLibro,
+            String prestatario,
+            LocalDate fechaPrevista) throws SQLException {
+
+        String buscarLibro = """
+            SELECT id
+            FROM libros
+            WHERE LOWER(nombre) = LOWER(?)
+            """;
+
+        String comprobarPrestamo = """
+            SELECT id
+            FROM prestamos
+            WHERE id_libro = ?
+              AND fecha_devolucion IS NULL
+            """;
+
+        String insertarPrestamo = """
+            INSERT INTO prestamos (
+                id_libro,
+                nombre_prestatario,
+                fecha_prestamo,
+                fecha_devolucion_prevista
+            )
+            VALUES (?, ?, ?, ?)
+            """;
+
+        try (Connection conexion = ConexionBD.conectar()) {
+
+            long idLibro;
+
+            // Buscar el libro.
+            try (PreparedStatement sentencia =
+                         conexion.prepareStatement(buscarLibro)) {
+
+                sentencia.setString(1, nombreLibro);
+
+                try (ResultSet resultado = sentencia.executeQuery()) {
+
+                    if (!resultado.next()) {
+                        System.out.println("El libro no existe.");
+                        return;
+                    }
+
+                    idLibro = resultado.getLong("id");
+                }
+            }
+
+            // Comprobar si ya está prestado.
+            try (PreparedStatement sentencia =
+                         conexion.prepareStatement(comprobarPrestamo)) {
+
+                sentencia.setLong(1, idLibro);
+
+                try (ResultSet resultado = sentencia.executeQuery()) {
+
+                    if (resultado.next()) {
+                        System.out.println(
+                                "El libro ya está prestado.");
+                        return;
+                    }
+                }
+            }
+
+            // Registrar el préstamo.
+            try (PreparedStatement sentencia =
+                         conexion.prepareStatement(insertarPrestamo)) {
+
+                sentencia.setLong(1, idLibro);
+                sentencia.setString(2, prestatario);
+                sentencia.setDate(3,
+                        java.sql.Date.valueOf(LocalDate.now()));
+                sentencia.setDate(4,
+                        java.sql.Date.valueOf(fechaPrevista));
+
+                sentencia.executeUpdate();
+
+                System.out.println(
+                        "Préstamo registrado correctamente.");
+                System.out.println("Libro: " + nombreLibro);
+                System.out.println("Prestatario: " + prestatario);
+                System.out.println(
+                        "Fecha de retirada: " + LocalDate.now());
+                System.out.println(
+                        "Fecha prevista de devolución: "
+                                + fechaPrevista);
+            }
+        }
+    }
+    public void devolverLibro(String nombreLibro)
+            throws SQLException {
+
+        String sql = """
+            UPDATE prestamos
+            SET fecha_devolucion = ?
+            WHERE id_libro = (
+                SELECT id
+                FROM libros
+                WHERE LOWER(nombre) = LOWER(?)
+            )
+            AND fecha_devolucion IS NULL
+            """;
+
+        try (Connection conexion = ConexionBD.conectar();
+             PreparedStatement sentencia =
+                     conexion.prepareStatement(sql)) {
+
+            sentencia.setDate(
+                    1, java.sql.Date.valueOf(LocalDate.now()));
+            sentencia.setString(2, nombreLibro);
+
+            int filas = sentencia.executeUpdate();
+
+            if (filas > 0) {
+                System.out.println(
+                        "Libro devuelto correctamente.");
+            } else {
+                System.out.println(
+                        "No se encontró un préstamo activo "
+                                + "para ese libro.");
+            }
+        }
+    }
+    public void mostrarPrestamos() throws SQLException {
+
+        String sql = """
+            SELECT l.nombre,
+                   p.nombre_prestatario,
+                   p.fecha_prestamo,
+                   p.fecha_devolucion_prevista,
+                   p.fecha_devolucion
+            FROM prestamos p
+            INNER JOIN libros l ON p.id_libro = l.id
+            ORDER BY p.fecha_prestamo DESC
+            """;
+
+        try (Connection conexion = ConexionBD.conectar();
+             Statement sentencia = conexion.createStatement();
+             ResultSet resultado = sentencia.executeQuery(sql)) {
+
+            boolean hayPrestamos = false;
+
+            System.out.println("\n*** HISTORIAL DE PRÉSTAMOS ***");
+
+            while (resultado.next()) {
+                hayPrestamos = true;
+
+                System.out.println("\nLibro: "
+                        + resultado.getString("nombre"));
+
+                System.out.println("Prestatario: "
+                        + resultado.getString("nombre_prestatario"));
+
+                System.out.println("Fecha de préstamo: "
+                        + resultado.getDate("fecha_prestamo"));
+
+                System.out.println("Fecha prevista de devolución: "
+                        + resultado.getDate(
+                        "fecha_devolucion_prevista"));
+
+                System.out.println("Fecha de devolución: "
+                        + resultado.getDate("fecha_devolucion"));
+
+                if (resultado.getDate("fecha_devolucion") == null) {
+                    System.out.println("Estado: PRESTADO");
+                } else {
+                    System.out.println("Estado: DEVUELTO");
+                }
+            }
+
+            if (!hayPrestamos) {
+                System.out.println(
+                        "No hay préstamos registrados.");
+            }
+        }
+    }
+    private void crearTablaPrestamos() throws SQLException {
+
+        String sql = """
+            CREATE TABLE IF NOT EXISTS prestamos (
+                id BIGINT GENERATED BY DEFAULT AS IDENTITY
+                    PRIMARY KEY,
+                id_libro BIGINT NOT NULL,
+                nombre_prestatario VARCHAR(255) NOT NULL,
+                fecha_prestamo DATE NOT NULL,
+                fecha_devolucion_prevista DATE NOT NULL,
+fecha_devolucion DATE,
+                FOREIGN KEY (id_libro)
+                    REFERENCES libros(id)
+            )
+            """;
+
+        try (Connection conexion = ConexionBD.conectar();
+             Statement sentencia = conexion.createStatement()) {
+
+            sentencia.execute(sql);
+        }
+    }
+
+
 }
+
+
+
     public class Libros {
+
+        public static String convertirATitulo(String texto) {
+            String[] palabras = texto.trim().toLowerCase().split("\\s+");
+            StringBuilder titulo = new StringBuilder();
+
+            for (String palabra : palabras) {
+                if (!palabra.isEmpty()) {
+                    titulo.append(
+                            palabra.substring(0, 1).toUpperCase()
+                    );
+                    titulo.append(palabra.substring(1));
+                    titulo.append(" ");
+                }
+            }
+
+            return titulo.toString().trim();
+        }
         public static void main(String[] args) throws SQLException {
             GestionLibros gestion =new GestionLibros();
             Scanner sc =new Scanner(System.in);
@@ -155,7 +379,10 @@ class GestionLibros {
           \t\t1. Agregar libro.
           \t\t2. Eliminar libro.
           \t\t3. Mostrar libro.
-          \t\t4. Salir del sistema.
+          \t\t4. Retirar libro en préstamo.
+          \t\t5. Devolver libro.
+          \t\t6. Mostrar historial de préstamos.
+          \t\t7. Salir del sistema.
           
           Seleccione una opcion:\s""");
 
@@ -167,7 +394,7 @@ class GestionLibros {
                     case 1 -> {
 
                         System.out.println("Ingrese el nombre del libro");
-                        String nombre = sc.nextLine().trim();
+                        String nombre = convertirATitulo(sc.nextLine());
 
                         System.out.println("Ingrese el nombre del autor del libro");
                         String autor = sc.nextLine().trim();
@@ -194,12 +421,57 @@ class GestionLibros {
                     }
 
                     case 4 -> {
+                        System.out.println("Nombre del libro que desea retirar:");
+                        String nombreLibro = convertirATitulo(sc.nextLine());
 
-                        System.out.println("Saliendo de la biblioteca...");
+                        System.out.println("Nombre de la persona que lo retira:");
+                        String prestatario = sc.nextLine().trim();
 
-                        sc.close();
-                        salir = false;
+                        LocalDate fechaPrevista = null;
+                        boolean fechaValida = false;
+
+                        while (!fechaValida) {
+                            System.out.println(
+                                    "Fecha prevista de devolución (AAAA-MM-DD):");
+
+                            String fechaTexto = sc.nextLine().trim();
+
+                            try {
+                                fechaPrevista = LocalDate.parse(fechaTexto);
+                                fechaValida = true;
+                            } catch (java.time.format.DateTimeParseException e) {
+                                System.out.println(
+                                        "Fecha incorrecta. Introduzca la fecha en formato "
+                                                + "AAAA-MM-DD (ejemplo: 2026-12-25).");
+                            }
+                        }
+
+                        if (fechaPrevista.isBefore(LocalDate.now())) {
+                            System.out.println(
+                                    "La fecha de devolución no puede ser anterior a hoy.");
+                        } else {
+                            gestion.prestarLibro(
+                                    nombreLibro, prestatario, fechaPrevista);
+                        }
                     }
+
+                    case 5 -> {
+                        System.out.println("Nombre del libro que devuelve:");
+                        String nombreLibro = convertirATitulo(sc.nextLine());
+
+                        gestion.devolverLibro(nombreLibro);
+                    }
+
+                    case 6 -> {
+                        gestion.mostrarPrestamos();
+                    }
+
+                    case 7 -> {
+                        System.out.println("Saliendo de la biblioteca...");
+                        salir = false;
+                        sc.close();
+                    }
+
 
                     default -> System.out.println("Opción, como tu opinión, inválida. Intente " +
                             "nuevamente.");
